@@ -1,29 +1,31 @@
 import time
-from functools import lru_cache
 from pathlib import Path
 
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
-from app.config import settings
-from app.services.parsers.base import ParsedDocument, ParsedTable
-
-
-@lru_cache(maxsize=1)
-def get_converter() -> DocumentConverter:
-    # Built once and reused. Statements are digital PDFs, so OCR stays off unless configured.
-    options = PdfPipelineOptions(do_ocr=settings.docling_ocr, do_table_structure=True)
-    options.table_structure_options.mode = TableFormerMode.ACCURATE
-    return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
+from statement_parser.parsers.base import ParsedDocument, ParsedTable
 
 
 class DoclingParser:
     name = "docling"
 
+    def __init__(self, *, ocr: bool) -> None:
+        # Statements are digital PDFs, so OCR stays off unless configured.
+        options = PdfPipelineOptions(do_ocr=ocr, do_table_structure=True)
+        options.table_structure_options.mode = TableFormerMode.ACCURATE
+        self._converter = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
+        self.ready = False
+
+    def warm_up(self) -> None:
+        """Load the layout and table models now, so the first request does not pay for the download and load."""
+        self._converter.initialize_pipeline(InputFormat.PDF)
+        self.ready = True
+
     def parse(self, pdf_path: Path) -> ParsedDocument:
         start = time.perf_counter()
-        document = get_converter().convert(pdf_path).document
+        document = self._converter.convert(pdf_path).document
 
         tables = []
         for table in document.tables:

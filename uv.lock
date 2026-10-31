@@ -2726,9 +2726,9 @@ wheels = [
 ]
 
 [[package]]
-name = "statement-poc"
+name = "statement-parser"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "docling" },
     { name = "fastapi" },

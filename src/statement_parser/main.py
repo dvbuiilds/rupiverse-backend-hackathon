@@ -4,10 +4,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import router
-from app.config import settings
-from app.errors import StatementError
-from app.services.parsers.docling_parser import get_converter
+from statement_parser.api.routes import router
+from statement_parser.config import settings
+from statement_parser.errors import StatementError
+from statement_parser.parsers.docling_parser import get_converter
 
 
 @asynccontextmanager

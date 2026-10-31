@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pdfplumber
 
-from app.services.parsers.base import ParsedDocument, ParsedTable
+from statement_parser.parsers.base import ParsedDocument, ParsedTable
 
 
 class PdfPlumberParser:

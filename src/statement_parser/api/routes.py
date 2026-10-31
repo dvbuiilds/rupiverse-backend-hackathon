@@ -2,8 +2,8 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, Form, UploadFile
 
-from app.schemas import StatementParseResult
-from app.services.pipeline import run_parse
+from statement_parser.schemas import StatementParseResult
+from statement_parser.services.pipeline import run_parse
 
 router = APIRouter(prefix="/v1")
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pikepdf
 
-from app.errors import StatementError
+from statement_parser.errors import StatementError
 
 
 def decrypt_pdf(src: Path, dest_dir: Path, password: str | None) -> Path:

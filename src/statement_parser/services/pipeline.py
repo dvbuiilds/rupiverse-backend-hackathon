@@ -5,15 +5,15 @@ from typing import Literal
 
 from fastapi import UploadFile
 
-from app.config import settings
-from app.errors import StatementError
-from app.schemas import StatementParseResult, TableOut, Timings
-from app.services.decrypt import decrypt_pdf
-from app.services.intake import save_upload
-from app.services.llm import LLMProcessor, NoopProcessor
-from app.services.parsers.base import ParsedDocument
-from app.services.parsers.docling_parser import DoclingParser
-from app.services.parsers.pdfplumber_parser import PdfPlumberParser
+from statement_parser.config import settings
+from statement_parser.errors import StatementError
+from statement_parser.schemas import StatementParseResult, TableOut, Timings
+from statement_parser.services.decrypt import decrypt_pdf
+from statement_parser.services.intake import save_upload
+from statement_parser.services.llm import LLMProcessor, NoopProcessor
+from statement_parser.parsers.base import ParsedDocument
+from statement_parser.parsers.docling_parser import DoclingParser
+from statement_parser.parsers.pdfplumber_parser import PdfPlumberParser
 
 DOCLING = DoclingParser()
 PDFPLUMBER = PdfPlumberParser()

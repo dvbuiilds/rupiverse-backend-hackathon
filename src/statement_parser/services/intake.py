@@ -3,8 +3,8 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.config import settings
-from app.errors import StatementError
+from statement_parser.config import settings
+from statement_parser.errors import StatementError
 
 CHUNK_SIZE = 1024 * 1024
 

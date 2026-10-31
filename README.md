@@ -11,7 +11,7 @@ brew install uv                 # macOS; see docs.astral.sh/uv for other platfor
 git clone https://github.com/dvbuiilds/rupiverse-backend-hackathon.git
 cd rupiverse-backend-hackathon
 uv sync                         # creates .venv and installs locked dependencies
-uv run uvicorn app.main:app --reload
+uv run uvicorn statement_parser.main:app --reload
 ```
 
 Open http://localhost:8000/docs to try the endpoint in the browser.

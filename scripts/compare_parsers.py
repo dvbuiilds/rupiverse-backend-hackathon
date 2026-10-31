@@ -12,10 +12,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from app.errors import StatementError  # noqa: E402
-from app.services.decrypt import decrypt_pdf  # noqa: E402
-from app.services.parsers.docling_parser import DoclingParser  # noqa: E402
-from app.services.parsers.pdfplumber_parser import PdfPlumberParser  # noqa: E402
+from statement_parser.errors import StatementError  # noqa: E402
+from statement_parser.services.decrypt import decrypt_pdf  # noqa: E402
+from statement_parser.parsers.docling_parser import DoclingParser  # noqa: E402
+from statement_parser.parsers.pdfplumber_parser import PdfPlumberParser  # noqa: E402
 from passwords import load_passwords  # noqa: E402
 
 folder = Path(sys.argv[1])

@@ -6,8 +6,8 @@ from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
-from app.config import settings
-from app.services.parsers.base import ParsedDocument, ParsedTable
+from statement_parser.config import settings
+from statement_parser.parsers.base import ParsedDocument, ParsedTable
 
 
 @lru_cache(maxsize=1)

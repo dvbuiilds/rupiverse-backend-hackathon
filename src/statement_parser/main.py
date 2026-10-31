@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from psycopg_pool import ConnectionPool
 
 from statement_parser import __version__
 from statement_parser.api.health import router as health_router
@@ -15,8 +16,9 @@ from statement_parser.errors import StatementError
 from statement_parser.logging_config import configure_logging
 from statement_parser.parsers.docling_parser import DoclingParser
 from statement_parser.parsers.pdfplumber_parser import PdfPlumberParser
-from statement_parser.services.llm import NoopProcessor
+from statement_parser.services.llm import GeminiExtractor
 from statement_parser.services.pipeline import StatementParseService
+from statement_parser.services.store import ImportStore
 
 logger = logging.getLogger(__name__)
 
@@ -26,14 +28,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Models load here, so a broken install or missing model fails at startup rather than on the first upload.
     docling = DoclingParser(ocr=settings.docling_ocr)
     docling.warm_up()
+    extractor = None
+    if settings.gemini_api_key is not None:
+        extractor = GeminiExtractor(
+            api_key=settings.gemini_api_key.get_secret_value(),
+            model=settings.gemini_model,
+            timeout_s=settings.gemini_timeout_s,
+        )
+    pool = None
+    store = None
+    if settings.database_url is not None:
+        if settings.dev_user_id is None:
+            raise RuntimeError("STATEMENT_DEV_USER_ID must be set when STATEMENT_DATABASE_URL is set.")
+        pool = ConnectionPool(settings.database_url.get_secret_value(), min_size=1, max_size=4, open=True)
+        store = ImportStore(pool, settings.dev_user_id)
+        store.check_user()
     app.state.parse_service = StatementParseService(
         settings=settings,
         docling=docling,
         pdfplumber=PdfPlumberParser(),
-        llm=NoopProcessor(),
+        extractor=extractor,
+        store=store,
     )
+    app.state.import_store = store
     logger.info("Statement parser %s ready", __version__)
-    yield
+    try:
+        yield
+    finally:
+        if pool is not None:
+            pool.close()
 
 
 async def statement_error_handler(_: Request, exc: StatementError) -> JSONResponse:

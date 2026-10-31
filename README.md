@@ -28,6 +28,25 @@ Settings come from environment variables with the `STATEMENT_` prefix, or from a
 | `STATEMENT_DOCLING_OCR` | `false` | OCR for scanned PDFs (statements are normally digital) |
 | `STATEMENT_FALLBACK_MIN_CHARS` | `200` | Docling output shorter than this falls back to pdfplumber |
 | `STATEMENT_MAX_CONCURRENT_PARSES` | `2` | Docling conversions allowed at once |
+| `STATEMENT_GEMINI_API_KEY` | unset | Gemini API key. Without it, parsing still works but `transactions` is empty |
+| `STATEMENT_GEMINI_MODEL` | `gemini-3.5-flash-lite` | Model used for extraction |
+| `STATEMENT_GEMINI_TIMEOUT_S` | `120` | Seconds to wait for Gemini |
+| `STATEMENT_DATABASE_URL` | unset | Postgres URL. Without it, extracted rows are returned but not saved |
+| `STATEMENT_DEV_USER_ID` | unset | ID of the `users` row that owns saved imports. Required with `STATEMENT_DATABASE_URL` |
+
+## Database
+
+The schema is in [sql/001_mvp_schema.sql](sql/001_mvp_schema.sql) and needs PostgreSQL 15 or newer. Apply it once to an empty database:
+
+```bash
+psql "$STATEMENT_DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001_mvp_schema.sql
+```
+
+Create the user who owns the imports, then put its ID in `STATEMENT_DEV_USER_ID`. The server checks that the user exists at startup:
+
+```sql
+INSERT INTO users (email, display_name) VALUES ('you@example.com', 'You') RETURNING id;
+```
 
 ## API
 
@@ -71,8 +90,10 @@ src/statement_parser/
     pipeline.py        StatementParseService: intake -> decrypt -> parse -> response
     intake.py          Streams the upload to a temp dir, checks size and PDF signature
     decrypt.py         Decrypts with pikepdf, enforces the page limit
-    llm.py             Builds the LLM payload (stub, no model call yet)
+    llm.py             Gemini extraction and the payload sent to the model
+    store.py           Saves imports, stages rows, and accepts rows into the ledger
   parsers/             Docling (primary) and pdfplumber (fallback)
+sql/                   Database schema, applied with psql
 scripts/               Dev helpers (demo client, parser comparison)
 docs/                  API reference, proposed database schema
 ```
@@ -80,6 +101,8 @@ docs/                  API reference, proposed database schema
 ## Notes and limitations
 
 - **No auth yet.** Production needs a JWT check in `api/routes.py`, and the user ID from the token should scope any stored data.
-- **Passwords and statements are not stored.** The upload and its decrypted copy live in a temp directory deleted when the request ends. Logs record the file hash, never the filename or password.
-- **The LLM step is a stub.** `services/llm.py` builds the payload but does not call a model.
+- **Passwords and statements are not stored.** The upload and its decrypted copy live in a temp directory deleted when the request ends. Logs record the file hash and counts, never the filename, password or transaction text.
+- **Parsed statement text is sent to Google's Gemini API** for extraction (`services/llm.py`). The password and the PDF itself are not sent. Only the extracted text leaves the server.
+- **Extracted rows are staged in Postgres** (`statement_imports` and `import_rows`) when `STATEMENT_DATABASE_URL` is set. The file name and password are not saved, but the narration is, so restrict access to that database.
+- **Nothing reaches the ledger until a row is accepted.** `POST /v1/statement-imports/{id}/accept` writes the chosen rows to `transactions`. Rows are never accepted automatically.
 - **Never commit statements or passwords.** `.gitignore` excludes `*.pdf`, `passwords.txt`, `out/`, `.env`, and `.venv/`.

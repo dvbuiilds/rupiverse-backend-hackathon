@@ -17,6 +17,7 @@ dependencies = [
     "docling",
     "pdfplumber",
     "pikepdf",
+    "psycopg[binary,pool]>=3.3.6",
 ]
 
 [project.scripts]

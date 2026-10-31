@@ -1,5 +1,7 @@
 from typing import Literal
+from uuid import UUID
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +26,16 @@ class Settings(BaseSettings):
     fallback_min_chars: int = 200
     # Docling keeps large models in memory during a conversion, so cap how many run at once.
     max_concurrent_parses: int = 2
+
+    # Extraction (Gemini). Without a key the endpoint still parses the PDF but returns no transactions.
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_timeout_s: float = 120.0
+
+    # Storage (Postgres). Without a URL the endpoint still returns results but saves nothing.
+    database_url: SecretStr | None = None
+    # Owner of every saved import. Stands in for the authenticated user until auth exists.
+    dev_user_id: UUID | None = None
 
 
 settings = Settings()

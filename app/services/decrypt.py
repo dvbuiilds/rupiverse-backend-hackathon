@@ -15,4 +15,6 @@ def decrypt_pdf(src: Path, dest_dir: Path, password: str | None) -> Path:
         if password:
             raise StatementError(422, "PDF_PASSWORD_INVALID", "The PDF password is incorrect.") from exc
         raise StatementError(422, "PDF_PASSWORD_REQUIRED", "This PDF is encrypted. Send its password.") from exc
+    except pikepdf.PdfError as exc:
+        raise StatementError(422, "PARSE_FAILED", "The PDF could not be opened. It may be damaged.") from exc
     return dest

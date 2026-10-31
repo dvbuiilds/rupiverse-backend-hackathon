@@ -1,0 +1,15 @@
+[project]
+name = "statement-poc"
+version = "0.1.0"
+description = "Credit card statement parsing POC: Docling primary, pdfplumber backup"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "pydantic-settings",
+    "httpx",
+    "docling",
+    "pdfplumber",
+    "pikepdf",
+]

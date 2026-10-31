@@ -1,109 +1,154 @@
 import logging
-from datetime import date
-from decimal import Decimal
+import time
+from dataclasses import dataclass
 from typing import Literal
 
-import httpx
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from google import genai
+from google.genai import errors, types
+from pydantic import BaseModel
 
 from statement_parser.errors import StatementError
-from statement_parser.parsers.base import ParsedDocument
-from statement_parser.schemas import ExtractedTransaction, LLMPayload
+from statement_parser.schemas import LLMPayload
+from statement_parser.services.redact import redact
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You extract transactions from a credit card statement.
-Return a JSON array. Each item has:
-- txn_date: ISO date (YYYY-MM-DD)
-- amount: positive number, no currency symbol
-- direction: "debit" for purchases, fees and interest; "credit" for payments and refunds
-- narration: the description as printed on the statement
-- merchant_raw: the merchant name, or null if there is none
-Skip totals, opening and closing balances, reward summaries and card-limit lines."""
+MAX_ATTEMPTS = 4  # one try, plus three retries on HTTP 429
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-_EXTRACTION_FAILED_MESSAGE = "The transactions could not be extracted from this statement. Try again."
+SYSTEM_PROMPT = """You read the text of one bank or credit card statement and return structured JSON.
 
-# Gemini's response schema (OpenAPI subset). Constrains the reply to the JSON array described in SYSTEM_PROMPT.
-RESPONSE_SCHEMA = {
-    "type": "ARRAY",
-    "items": {
-        "type": "OBJECT",
-        "properties": {
-            "txn_date": {"type": "STRING", "description": "ISO date, YYYY-MM-DD"},
-            "amount": {"type": "NUMBER", "description": "Positive amount, no currency symbol"},
-            "direction": {"type": "STRING", "enum": ["debit", "credit"]},
-            "narration": {"type": "STRING"},
-            "merchant_raw": {"type": "STRING", "nullable": True},
-        },
-        "required": ["txn_date", "amount", "direction", "narration", "merchant_raw"],
-    },
-}
+Input: <categories> lists the only category slugs you may use, each with its flow (expense or income).
+<statement> holds text extracted from the PDF. Personal identifiers are already masked.
+
+Statement fields:
+- institution_name, card_product, account_last4 (the last 4 digits of the card or account number, or null).
+- statement_type: "credit_card", "bank", "mixed", or "unknown". Use "unknown" if this is not a bank or card statement, and return no transactions.
+- period_from, period_to, statement_date: ISO YYYY-MM-DD, or null.
+- previous_balance, closing_balance: positive amounts. For a card, these are the amounts owed.
+- currency: ISO code, INR unless printed otherwise.
+
+Transaction rows:
+- Keep purchases, fees, interest, GST on fees, payments, refunds and cashback. Skip totals, opening and closing balance lines, reward and GST invoice tables, card limits, and summary tables.
+- Keep in-list lines such as "GST ON FUEL SURCHARGE" as transactions.
+- Drop repeated page headers. Repair rows the PDF extraction split or merged; lower confidence when you infer a value.
+- transaction_date: ISO. posted_date: ISO or null. transaction_time: HH:MM 24-hour, or null if not printed. Never invent a time.
+- amount: positive number, no symbols or separators.
+- direction: "debit" for money out, "credit" for money in. Read it from "+", "Cr", "Dr", "CR", "DR". A bare "C" before an amount is a mis-decoded rupee sign: "C 222.00" is a debit, "+ C 30.00" is a credit.
+- description_raw: the narration as printed.
+- display_description: a short clean name, at most 200 characters. Remove UPI/ prefixes, VPAs, phone numbers, reference numbers, RSP*, PVT LTD and city suffixes.
+- merchant_name: display name such as "Swiggy Instamart", or null. merchant_normalized: lowercase key. Variants of one merchant get the same key. Null if there is no merchant.
+- balance_after: running balance printed on the row, or null.
+- suggested_type: "transfer" for card bill payments (PAYMENT RECEIVED, MB/IB PAYMENT, BBPS), account transfers and cash withdrawals. "income" for salary, refunds, cashback and interest. Otherwise "expense".
+- transfer_kind: for transfers only: "credit_card_payment", "account_transfer", "interbank", "cash_withdrawal" or "other". Null otherwise.
+- category: a slug from <categories> whose flow matches suggested_type. Null for transfers, and when unsure. Payment rails (UPI, NEFT, IMPS) are never categories.
+  Fuel surcharge and GST lines are "fees". Cashback is "other_income". Merchant refunds are "refunds".
+- confidence: 0 to 1. Choose null over a weak guess.
+- bank_category_hint: a category column printed by the bank (for example Axis MERCHANT CATEGORY), or null.
+"""
 
 
-class _ModelTransaction(BaseModel):
-    """One item as the model returns it, before conversion to the API's signed paise."""
-
-    txn_date: date
-    # Money has two decimals. A reply with finer amounts is rejected rather than rounded into a wrong value.
-    amount: Decimal = Field(gt=0, multiple_of=Decimal("0.01"))
+class ExtractedTxn(BaseModel):
+    row_number: int
+    transaction_date: str
+    transaction_time: str | None
+    posted_date: str | None
+    description_raw: str
+    display_description: str
+    merchant_name: str | None
+    merchant_normalized: str | None
+    amount: float
+    currency: str
     direction: Literal["debit", "credit"]
-    narration: str
-    merchant_raw: str | None
+    balance_after: float | None
+    suggested_type: Literal["expense", "income", "transfer"]
+    transfer_kind: Literal["credit_card_payment", "account_transfer", "interbank", "cash_withdrawal", "other"] | None
+    category: str | None
+    confidence: float
+    bank_category_hint: str | None
 
 
-_MODEL_TRANSACTIONS = TypeAdapter(list[_ModelTransaction])
+class StatementMeta(BaseModel):
+    institution_name: str | None
+    card_product: str | None
+    account_last4: str | None
+    statement_type: Literal["bank", "credit_card", "mixed", "unknown"]
+    period_from: str | None
+    period_to: str | None
+    statement_date: str | None
+    previous_balance: float | None
+    closing_balance: float | None
+    currency: str
 
 
-def build_payload(parsed: ParsedDocument) -> LLMPayload:
-    """The exact system prompt and user content sent to the model, returned with the result for inspection."""
-    return LLMPayload(system_prompt=SYSTEM_PROMPT, user_content=parsed.markdown)
+class StatementExtraction(BaseModel):
+    statement: StatementMeta
+    transactions: list[ExtractedTxn]
+
+
+@dataclass(frozen=True)
+class CategoryOption:
+    id: str
+    slug: str
+    name: str
+    flow_type: str
+
+
+def build_payload(markdown: str) -> LLMPayload:
+    """The system prompt and the redacted statement text, returned by the dev parse endpoint for inspection."""
+    return LLMPayload(system_prompt=SYSTEM_PROMPT, user_content=redact(markdown))
 
 
 class GeminiExtractor:
-    """Sends the statement text to Gemini and returns the transactions it found."""
+    """Sends the redacted statement text to Gemini and returns the structured reply."""
 
-    def __init__(self, api_key: str, model: str, timeout_s: float, client: httpx.Client | None = None) -> None:
+    def __init__(self, api_key: str, model: str, timeout_s: float, client: genai.Client | None = None) -> None:
         self._model = model
-        self._url = GEMINI_URL.format(model=model)
-        self._api_key = api_key
-        self._client = client or httpx.Client(timeout=timeout_s)
+        self._client = client or genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=int(timeout_s * 1000)),
+        )
 
-    def extract(self, parsed: ParsedDocument) -> list[ExtractedTransaction]:
-        body = {
-            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-            "contents": [{"role": "user", "parts": [{"text": parsed.markdown}]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "responseSchema": RESPONSE_SCHEMA,
-            },
-        }
-        # The key travels in a header, not the URL, so no request log can contain it.
+    def extract(self, statement_text: str, categories: list[CategoryOption]) -> StatementExtraction:
+        category_lines = "\n".join(f"{c.slug}: {c.name} ({c.flow_type})" for c in categories)
+        contents = f"<categories>\n{category_lines}\n</categories>\n<statement>\n{redact(statement_text)}\n</statement>"
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            response_schema=StatementExtraction,
+            max_output_tokens=32768,
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
+        )
+        response = self._generate(contents, config)
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate is None or candidate.finish_reason != types.FinishReason.STOP:
+            logger.warning("Gemini reply was cut off or empty")
+            raise _extraction_failed()
+        if isinstance(response.parsed, StatementExtraction):
+            return response.parsed
         try:
-            response = self._client.post(self._url, headers={"x-goog-api-key": self._api_key}, json=body)
-            response.raise_for_status()
-            text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-            items = _MODEL_TRANSACTIONS.validate_json(text)
-        except httpx.HTTPStatusError as exc:
-            logger.warning("Gemini returned HTTP %d", exc.response.status_code)
-            raise StatementError(502, "EXTRACTION_FAILED", _EXTRACTION_FAILED_MESSAGE) from exc
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, ValidationError) as exc:
+            return StatementExtraction.model_validate_json(response.text or "")
+        except ValueError as exc:
             # Logs the exception type only: its message can echo statement text.
-            logger.warning("Gemini reply could not be read: %s", type(exc).__name__)
-            raise StatementError(502, "EXTRACTION_FAILED", _EXTRACTION_FAILED_MESSAGE) from exc
+            logger.warning("Gemini reply did not match the schema: %s", type(exc).__name__)
+            raise _extraction_failed() from exc
 
-        transactions = [_to_extracted(item) for item in items]
-        logger.info("extracted transactions=%d model=%s", len(transactions), self._model)
-        return transactions
+    def _generate(self, contents: str, config: types.GenerateContentConfig) -> types.GenerateContentResponse:
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                return self._client.models.generate_content(model=self._model, contents=contents, config=config)
+            except errors.ClientError as exc:
+                if exc.code == 429 and attempt < MAX_ATTEMPTS:
+                    time.sleep(5 * attempt)
+                    continue
+                logger.warning("Gemini rejected the request: HTTP %s", exc.code)
+                raise _extraction_failed() from exc
+            except Exception as exc:
+                logger.warning("Gemini call failed: %s", type(exc).__name__)
+                raise _extraction_failed() from exc
+        raise _extraction_failed()
 
 
-def _to_extracted(item: _ModelTransaction) -> ExtractedTransaction:
-    paise = int((item.amount * 100).to_integral_value())
-    if item.direction == "debit":
-        paise = -paise
-    return ExtractedTransaction(
-        txn_date=item.txn_date,
-        amount_paise=paise,
-        narration=item.narration,
-        merchant_raw=item.merchant_raw,
+def _extraction_failed() -> StatementError:
+    return StatementError(
+        500, "INTERNAL", "Could not read the transactions from this statement. Try again in a minute."
     )

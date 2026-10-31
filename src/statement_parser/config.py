@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:3000"]
 
     # Intake limits
-    max_pdf_mb: int = 20
+    max_pdf_mb: int = 10
     max_pages: int = 50
 
     # Parsing
@@ -27,15 +27,17 @@ class Settings(BaseSettings):
     # Docling keeps large models in memory during a conversion, so cap how many run at once.
     max_concurrent_parses: int = 2
 
-    # Extraction (Gemini). Without a key the endpoint still parses the PDF but returns no transactions.
+    # Extraction (Gemini). Without a key, the statement import endpoint fails with INTERNAL.
     gemini_api_key: SecretStr | None = None
     gemini_model: str = "gemini-3.5-flash-lite"
     gemini_timeout_s: float = 120.0
+    # Categories are only set on a row when the model is at least this sure.
+    category_confidence_threshold: float = 0.8
 
-    # Storage (Postgres). Without a URL the endpoint still returns results but saves nothing.
+    # Storage (Postgres). Without a URL the import and ledger endpoints return 503.
     database_url: SecretStr | None = None
-    # Owner of every saved import. Stands in for the authenticated user until auth exists.
-    dev_user_id: UUID | None = None
+    # Owner of all data. Stands in for per-user auth until a JWT check exists.
+    demo_user_id: UUID | None = None
 
 
 settings = Settings()

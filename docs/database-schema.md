@@ -160,7 +160,7 @@ Index `(user_id, file_sha256)` to identify an exact previously imported file and
 
 ### 7. `import_rows`
 
-One row per extracted candidate transaction. These rows remain staging data until accepted.
+One row per statement row that was added to the ledger. Rows that were duplicates or fell before the opening date are not stored.
 
 | Column | Type | Rule / meaning |
 | --- | --- | --- |
@@ -284,3 +284,8 @@ ORDER BY total_amount DESC;
 **Defer:** budgets, recurring transactions, Account Aggregator consent, balance-history snapshots, advanced classifier training, external merchant scraping, and a separate transfer table. None is needed to answer the current “where did I spend?” questions.
 
 **Final implementation choice:** keep the existing v3 `transactions` + `categories` direction, add explicit account tags and statement staging, and use the schema above as the mobile MVP contract. The schema deliberately avoids over-specializing categories or importing sensitive raw statement data into the permanent ledger.
+
+## Changes for the statement import
+
+- `categories.slug` (lowercase, unique per user among active rows) and `categories.color` (`#RRGGBB`). The app refers to categories by slug.
+- `sql/seed.sql` provides the dummy user, cards, the "Unlinked account" placeholder and 16 categories.

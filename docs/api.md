@@ -1,69 +1,83 @@
 # API reference
 
 Interactive docs are served at `/docs` while the server runs.
+The contract the mobile app builds against is `statement-import-contract.md` in the parent folder.
 
-## `POST /v1/statements/parse`
+## `POST /v1/accounts/{accountId}/statements`
 
-Form fields:
+Uploads one statement PDF to an account, extracts the transactions with Gemini, and adds the new ones to the ledger.
 
-| Field      | Required | Description                                   |
-| ---------- | -------- | --------------------------------------------- |
-| `file`     | yes      | Credit card statement PDF                     |
-| `password` | no       | PDF password, if the file is encrypted        |
-| `parser`   | no       | `docling` (default) or `pdfplumber`           |
+Form fields (`multipart/form-data`):
 
-Response (200): `file_name`, `file_sha256`, `page_count`, `parser_used`, `markdown`, `tables`, `warnings`, `timings_ms`, `llm` (the system prompt and user content sent to the model), `transactions`, and `statement_import_id`.
+| Field      | Required | Description                                          |
+| ---------- | -------- | ---------------------------------------------------- |
+| `file`     | yes      | `application/pdf`, 10 MB max                         |
+| `password` | no       | Only used to open the file. Never logged or stored.  |
 
-Each item in `transactions` has `txn_date` (ISO date), `amount_paise` (integer; negative is money out, positive is money in), `narration`, and `merchant_raw` (or `null`). Without `STATEMENT_GEMINI_API_KEY`, `transactions` is `[]` and `warnings` says why.
-
-`statement_import_id` is the UUID of the saved `statement_imports` row, whose rows are in `import_rows` with `review_status = 'pending'`. It is `null` when nothing was saved: no Gemini key, or no `STATEMENT_DATABASE_URL`. A warning says which. Re-uploading the same file creates a new import each time.
-
-## `POST /v1/statement-imports/{import_id}/accept`
-
-Writes the chosen staged rows to the `transactions` ledger. Nothing is accepted automatically. The request is all-or-nothing: if any row is rejected, no row is written.
-
-Body (JSON):
+Response (200), in the contract's camelCase:
 
 ```json
 {
-  "account_id": "9f0c...",
-  "rows": [
-    {"row_number": 1, "transaction_type": "expense", "category_id": "4a1e..."},
-    {"row_number": 2, "transaction_type": "transfer", "transfer_kind": "credit_card_payment", "counter_account_id": "7b2d..."},
-    {"row_number": 3, "skip": true}
+  "statement": {"id": "5f1c...", "fileName": "HDFC_Sep.pdf", "sizeBytes": 219136,
+                "periodStart": "2026-09-01", "periodEnd": "2026-09-30", "status": "imported"},
+  "summary": {"transactionsAdded": 42, "duplicatesIgnored": 0, "skippedBeforeOpeningDate": 0, "skipReason": null},
+  "balance": {"previousPaise": 3845000, "amountPaise": 3978200, "asOf": "2026-09-30"},
+  "transactions": [
+    {"id": "9b2e...", "accountId": "c1...", "date": "2026-09-29", "description": "Ramesh",
+     "amountPaise": -85000, "categoryId": "food"}
   ]
 }
 ```
 
-- `account_id` is the account the rows belong to (the card, for a card statement). Staged rows have no account of their own.
-- Each row is either `skip: true` or has a `transaction_type` of `expense`, `income` or `transfer`.
-- A transfer needs `transfer_kind` (`interbank`, `account_transfer`, `credit_card_payment`, `cash_withdrawal` or `other`) and `counter_account_id`, and cannot have a category. Other types take neither.
-- `category_id` is optional. Its flow must match the type.
+- `amountPaise` is negative for money out of the account, positive for money in.
+- `balance.amountPaise` is the amount owed for a card (positive).
+- `categoryId` is a slug from `GET /v1/categories`, or `null` when the model is not confident (under 0.8).
+- `status: "skipped"` is a normal 200 with `transactions: []` and a `skipReason`: `NO_TRANSACTIONS`, `ALL_BEFORE_OPENING_DATE` or `ALL_DUPLICATES`.
 
-Response (200): `statement_import_id`, `accepted`, `skipped`, and `pending` (rows still waiting). The import becomes `completed` when `pending` is 0.
+Rules:
+- Rows dated on or before the account's `opening_balance_date` are not stored.
+- Dedupe key: date, direction, amount, narration (letters and digits, ignoring case) and running balance. Re-uploading a statement adds nothing. Two identical rows in one statement are both kept.
+- Card bill payments are transfers through the "Unlinked account", so they are not income or expense.
+- The card's balance is updated only when the statement is not older than the balance already stored.
 
-Errors: 404 `NOT_FOUND` for an unknown import or an account that is not the user's. 422 `INVALID_REQUEST` for a bad row decision, a row that is already accepted, or a category that does not fit the ledger. 503 `DATABASE_UNAVAILABLE` when `STATEMENT_DATABASE_URL` is not set.
+Errors:
+
+| Status | Code | When |
+| --- | --- | --- |
+| 400 | `INVALID_REQUEST` | Missing file, not a PDF, over 10 MB |
+| 401 | `UNAUTHENTICATED` | Missing or wrong token |
+| 404 | `ACCOUNT_NOT_FOUND` | Unknown or non-UUID account, or an archived account |
+| 422 | `PASSWORD_REQUIRED` / `WRONG_PASSWORD` | Encrypted PDF with no or wrong password |
+| 422 | `UNREADABLE_PDF` | Scanned or damaged PDF |
+| 422 | `UNRECOGNISED_STATEMENT` | Not a bank or card statement, or the card's last 4 digits do not match the account |
+| 500 | `INTERNAL` | Model failure, rate limit, or anything else. Try again |
+| 503 | `DATABASE_UNAVAILABLE` | `STATEMENT_DATABASE_URL` is not set |
+
+## `GET /v1/accounts`
+
+Lists the user's active accounts (the "Unlinked account" is left out). `balance.amountPaise` is the card's amount owed.
+
+## `GET /v1/categories`
+
+Lists active categories. `id` is the slug the app stores.
+
+## `GET /v1/transactions`
+
+Query: `accountId` (optional UUID), `from` and `to` (optional `YYYY-MM-DD`), `limit` (1 to 500, default 200).
+Returns the same item shape as the import, newest first. With `accountId`, amounts are signed from that account's side.
+
+## `POST /v1/statements/parse` (dev tool)
+
+Parses a PDF and returns the text and tables, without calling the model. `llm` shows the system prompt and the redacted text the import endpoint would send. Form fields: `file`, `password`, `parser` (`docling` or `pdfplumber`).
 
 ## `GET /healthz`
 
-Returns `{"status": "ok", "docling_converter_ready": true}`.
+Returns `{"status": "ok", "docling_converter_ready": true}`. No token needed.
 
-## Errors
+## Error shape
 
-Every error uses this shape:
+Every error:
 
 ```json
-{"error": {"code": "PDF_PASSWORD_REQUIRED", "message": "This PDF is encrypted. Send its password."}}
+{"error": {"code": "WRONG_PASSWORD", "message": "The PDF password is incorrect."}}
 ```
-
-| Code                                                                 | Status |
-| -------------------------------------------------------------------- | ------ |
-| `FILE_TOO_LARGE`                                                     | 413    |
-| `NOT_A_PDF`                                                          | 415    |
-| `INVALID_REQUEST`                                                    | 422    |
-| `PDF_PASSWORD_REQUIRED`, `PDF_PASSWORD_INVALID`                      | 422    |
-| `TOO_MANY_PAGES`, `PARSE_FAILED`                                     | 422    |
-| `EXTRACTION_FAILED`                                                  | 502    |
-| `NOT_FOUND`                                                          | 404    |
-| `DATABASE_UNAVAILABLE`                                               | 503    |
-| `INTERNAL_ERROR`                                                     | 500    |

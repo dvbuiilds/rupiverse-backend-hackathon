@@ -83,6 +83,8 @@ CREATE TABLE categories (
   user_id uuid NOT NULL REFERENCES users (id),
   parent_id uuid,
   name varchar(60) NOT NULL CHECK (btrim(name) <> ''),
+  slug text NOT NULL CHECK (slug ~ '^[a-z][a-z0-9_]*$'),
+  color char(7) NOT NULL CHECK (color ~ '^#[0-9A-Fa-f]{6}$'),
   flow_type text NOT NULL CHECK (flow_type IN ('income', 'expense')),
   created_via text NOT NULL CHECK (created_via IN ('system', 'user', 'ai')),
   is_active boolean NOT NULL DEFAULT true,
@@ -101,6 +103,8 @@ CREATE TABLE categories (
 CREATE UNIQUE INDEX categories_name_active_key ON categories (
   user_id, COALESCE(parent_id, '00000000-0000-0000-0000-000000000000'::uuid), flow_type, lower(name)
 ) WHERE deleted_at IS NULL;
+-- The app refers to categories by slug (GET /v1/categories returns it as id).
+CREATE UNIQUE INDEX categories_slug_active_key ON categories (user_id, slug) WHERE deleted_at IS NULL;
 CREATE INDEX categories_picker_idx ON categories (user_id, flow_type, parent_id, name) WHERE deleted_at IS NULL;
 
 CREATE FUNCTION categories_check_parent_flow() RETURNS trigger LANGUAGE plpgsql AS $$

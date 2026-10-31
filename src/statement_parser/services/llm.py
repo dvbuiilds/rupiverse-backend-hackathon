@@ -1,7 +1,7 @@
 from typing import Protocol
 
-from statement_parser.schemas import LLMPayload
 from statement_parser.parsers.base import ParsedDocument
+from statement_parser.schemas import LLMPayload
 
 SYSTEM_PROMPT = """You extract transactions from a credit card statement.
 Return a JSON array. Each item has:

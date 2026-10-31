@@ -28,3 +28,14 @@ class StatementParseResult(BaseModel):
     warnings: list[str]
     timings_ms: Timings
     llm: LLMPayload
+
+
+class ErrorBody(BaseModel):
+    code: str
+    message: str
+
+
+class ErrorResponse(BaseModel):
+    """Every error the API returns has this shape."""
+
+    error: ErrorBody

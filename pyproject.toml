@@ -19,5 +19,20 @@ dependencies = [
     "pikepdf",
 ]
 
+[project.scripts]
+statement-parser = "statement_parser.__main__:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/statement_parser"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.3",
+]

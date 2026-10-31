@@ -3,3 +3,5 @@ out/
 __pycache__/
 *.pdf
 passwords.txt
+.env
+.ruff_cache/

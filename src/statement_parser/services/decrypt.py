@@ -5,11 +5,13 @@ import pikepdf
 from statement_parser.errors import StatementError
 
 
-def decrypt_pdf(src: Path, dest_dir: Path, password: str | None) -> Path:
+def decrypt_pdf(src: Path, dest_dir: Path, password: str | None, max_pages: int) -> Path:
     """Write a decrypted copy of the PDF into dest_dir so every parser reads the same plain file."""
     dest = dest_dir / "decrypted.pdf"
     try:
         with pikepdf.open(src, password=password or "") as pdf:
+            if len(pdf.pages) > max_pages:
+                raise StatementError(422, "TOO_MANY_PAGES", f"PDF has more than {max_pages} pages.")
             pdf.save(dest)
     except pikepdf.PasswordError as exc:
         if password:
